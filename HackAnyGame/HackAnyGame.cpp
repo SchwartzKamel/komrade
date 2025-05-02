@@ -2,10 +2,57 @@
 //
 
 #include "stdafx.h"
-#include "proc.h"
-#include "mem.h"
+#include "proc.h" // Keep for GetProcID, GetModuleBaseAddress if needed elsewhere, though MemoryManager duplicates some functionality
+#include "mem.h"  // Keep for PatchEx/NopEx used in recoil_delete
+#include "memory.h" // Include the new memory subsystem header
 
+// --- Old Example (Commented Out) ---
+/*
 static int leet_ammo()
+{
+	//Get ProcID of the target process
+	DWORD procID = GetProcID(L"ac_client.exe");
+
+	//Getmodulebaseaddress
+	uintptr_t moduleBase = GetModuleBaseAddress(procID, L"ac_client.exe");
+
+	//Get Handle to Process
+	HANDLE hProcess = 0;
+	hProcess = OpenProcess(PROCESS_ALL_ACCESS, NULL, procID);
+
+	//Resolve base address of the pointer chain
+	uintptr_t dynamicPtrBaseAddr = moduleBase + 0x10f4f4; // Old offset, might be incorrect for v1.2.0.2
+
+	std::cout << "DynamicPtrBaseAddr = " << "0x" << std::hex << dynamicPtrBaseAddr << std::endl;
+
+	//Resolve our ammo pointer chain
+	std::vector<unsigned int> ammoOffsets = { 0x374, 0x14, 0x0 }; // Old offsets
+	uintptr_t ammoAddr = FindDMAAddy(hProcess, dynamicPtrBaseAddr, ammoOffsets);
+
+	std::cout << "ammoAddr = " << "0x" << std::hex << ammoAddr << std::endl;
+
+	//Read Ammo value
+	int ammoValue = 0;
+
+	ReadProcessMemory(hProcess, (BYTE*)ammoAddr, &ammoValue, sizeof(ammoValue), nullptr);
+	std::cout << "Current ammo = " << std::dec << ammoValue << std::endl;
+
+	//Write to it
+	int newAmmo = 1337;
+	WriteProcessMemory(hProcess, (BYTE*)ammoAddr, &newAmmo, sizeof(newAmmo), nullptr);
+
+	//Read out again
+	ReadProcessMemory(hProcess, (BYTE*)ammoAddr, &ammoValue, sizeof(ammoValue), nullptr);
+
+	std::cout << "New ammo = " << std::dec << ammoValue << std::endl;
+
+
+	getchar();
+	return 0;
+}
+*/
+
+// --- Existing Cheat Loop ---
 {
 	//Get ProcID of the target process
 	DWORD procID = GetProcID(L"ac_client.exe");
@@ -220,9 +267,165 @@ static int recoil_delete()
 	return 0;
 }
 
+
+// --- Hooking Demonstration ---
+
+// Define a function pointer type for the original function
+typedef int(__stdcall* tOriginalFunction)(int, int);
+// Pointer to hold the trampoline address to the original function
+tOriginalFunction fpOriginalFunction = nullptr;
+
+// The function we want to hook
+int __stdcall OriginalFunction(int a, int b) {
+	std::cout << "  OriginalFunction(" << a << ", " << b << ") called. Returning " << (a + b) << "." << std::endl;
+	return a + b;
+}
+
+// Our detour function that will replace OriginalFunction
+int __stdcall DetourFunction(int a, int b) {
+	std::cout << ">> DetourFunction(" << a << ", " << b << ") called." << std::endl;
+	// Call the original function using the trampoline
+	int originalResult = fpOriginalFunction(a, b);
+	std::cout << ">> Original function returned: " << originalResult << std::endl;
+	int detourResult = a * b; // Do something different
+	std::cout << ">> Detour returning: " << detourResult << std::endl;
+	return detourResult;
+}
+
+// Function to demonstrate hooking
+static int test_hooking() {
+	Memory::MemoryManager memManager; // Using MemoryManager for consistency, though not strictly needed for local hook
+	bool hookInitialized = false;
+	bool hookCreated = false;
+
+	std::cout << "\n--- Testing Hooking ---" << std::endl;
+
+	// Initialize MinHook
+	if (memManager.InitializeHooking()) {
+		std::cout << "MinHook initialized successfully." << std::endl;
+		hookInitialized = true;
+	} else {
+		std::cerr << "Error: Failed to initialize MinHook." << std::endl;
+		goto cleanup; // Use goto for simple cleanup in this example
+	}
+
+	// Create the hook for OriginalFunction
+	std::cout << "Creating hook for OriginalFunction at 0x" << std::hex << (uintptr_t)OriginalFunction << std::endl;
+	if (memManager.CreateHook(&OriginalFunction, &DetourFunction, reinterpret_cast<LPVOID*>(&fpOriginalFunction))) {
+		std::cout << "Hook created successfully. Trampoline at 0x" << std::hex << (uintptr_t)fpOriginalFunction << std::endl;
+		hookCreated = true;
+	} else {
+		std::cerr << "Error: Failed to create hook." << std::endl;
+		goto cleanup;
+	}
+
+	// Test the hook
+	std::cout << "\nCalling OriginalFunction (should be detoured):" << std::endl;
+	int result1 = OriginalFunction(5, 3);
+	std::cout << "Result after hook: " << result1 << " (Expected detour result: 15)" << std::endl;
+
+	// Disable the hook
+	std::cout << "\nDisabling hook..." << std::endl;
+	if (!memManager.DisableHook(&OriginalFunction)) {
+		std::cerr << "Warning: Failed to disable hook." << std::endl;
+	}
+
+	// Test again (should call original directly)
+	std::cout << "\nCalling OriginalFunction (hook disabled):" << std::endl;
+	int result2 = OriginalFunction(5, 3);
+	std::cout << "Result after disabling hook: " << result2 << " (Expected original result: 8)" << std::endl;
+
+	// Re-enable hook (using CreateHook again implicitly enables if already created but disabled)
+	// Or use MH_EnableHook directly if needed. For simplicity, we'll just remove it now.
+
+cleanup:
+	// Remove the hook if it was created
+	if (hookCreated) {
+		std::cout << "\nRemoving hook..." << std::endl;
+		if (!memManager.RemoveHook(&OriginalFunction)) {
+			std::cerr << "Warning: Failed to remove hook." << std::endl;
+		}
+	}
+
+	// Uninitialize MinHook if it was initialized
+	if (hookInitialized) {
+		std::cout << "Uninitializing MinHook..." << std::endl;
+		memManager.UninitializeHooking();
+	}
+
+	std::cout << "\n--- Hooking Test Complete ---" << std::endl;
+	std::cout << "Press Enter to exit." << std::endl;
+	getchar();
+	return 0;
+}
+
+
+// --- Test Function for Signature Scanning ---
+static int test_signature_scan()
+{
+	const wchar_t* processName = L"ac_client.exe";
+	// Signature for player base pointer in Assault Cube v1.2.0.2
+	// Found via Cheat Engine searching for value pointed to by ac_client.exe+17E0A8
+	// Example Signature: Points to the instruction that loads the player base address
+	const char* playerBaseSignature = "8B 0D ? ? ? ? 85 C9 74 0A 8B 01 FF 50 04"; // Example, verify this pattern
+
+	Memory::MemoryManager memManager;
+
+	std::cout << "Attempting to attach to process: " << processName << std::endl;
+
+	// Attach using process name (window title might be less reliable)
+	DWORD procId = GetProcID(processName); // Use old proc helper to get ID
+	if (!procId) {
+		std::cerr << "Error: Could not find process ID for " << processName << ". Is the game running?" << std::endl;
+		getchar();
+		return 1;
+	}
+
+	if (!memManager.Attach(procId)) {
+		std::cerr << "Error: Failed to attach MemoryManager to process ID " << procId << "." << std::endl;
+		getchar();
+		return 1;
+	}
+
+	std::cout << "Successfully attached to process ID: " << memManager.GetProcessId() << std::endl;
+	std::cout << "Scanning for player base signature in module: " << processName << std::endl;
+	std::cout << "Pattern: " << playerBaseSignature << std::endl;
+
+	uintptr_t foundAddress = memManager.FindPatternInModule(processName, playerBaseSignature);
+
+	if (foundAddress != 0) {
+		std::cout << "Signature found at address: 0x" << std::hex << foundAddress << std::endl;
+
+		// Optional: Read the address the instruction points to (requires parsing the instruction)
+        // For "8B 0D [addr]", the address is at foundAddress + 2
+        uintptr_t pointerAddressLocation = foundAddress + 2;
+        uintptr_t playerBaseAddressPtr = 0;
+        if (memManager.ReadMemory((LPCVOID)pointerAddressLocation, &playerBaseAddressPtr, sizeof(playerBaseAddressPtr))) {
+             std::cout << "Instruction points to address: 0x" << std::hex << playerBaseAddressPtr << std::endl;
+             // Now you could read the actual player base:
+             // uintptr_t playerBase = memManager.Read<uintptr_t>((LPCVOID)playerBaseAddressPtr);
+             // std::cout << "Actual Player Base Address (read from pointer): 0x" << std::hex << playerBase << std::endl;
+        } else {
+            std::cerr << "Warning: Found signature but failed to read the pointer address from instruction." << std::endl;
+        }
+
+	} else {
+		std::cerr << "Error: Signature pattern not found." << std::endl;
+	}
+
+	memManager.Detach();
+	std::cout << "Detached from process." << std::endl;
+	std::cout << "Press Enter to exit." << std::endl;
+	getchar();
+	return 0;
+}
+
+
 int main()
 {
-	// leet_ammo(); // Removed call to the old single-shot ammo function
-	recoil_delete();
+	// recoil_delete();       // Call the old cheat loop
+	// test_signature_scan(); // Call the signature scan test
+	test_hooking();        // Call the new hooking test
+	return 0;
 }
 
