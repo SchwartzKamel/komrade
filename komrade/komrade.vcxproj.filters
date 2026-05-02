@@ -21,7 +21,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="HackAnyGame.cpp">
+    <ClCompile Include="komrade.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="proc.cpp">
@@ -42,6 +42,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="mem.h">
+      <Filter>mem</Filter>
+    </ClInclude>
+    <ClInclude Include="aimbot.h">
       <Filter>mem</Filter>
     </ClInclude>
   </ItemGroup>
