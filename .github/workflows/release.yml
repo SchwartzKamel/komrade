@@ -17,12 +17,9 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Restore NuGet packages
-        run: nuget restore komrade.sln
-
       - name: Build Release x86
         run: |
-          msbuild komrade.sln /p:Configuration=Release /p:Platform=Win32 /v:minimal
+          msbuild komrade.sln /p:Configuration=Release /p:Platform=x86 /v:minimal
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
