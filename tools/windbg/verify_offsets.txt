@@ -10,22 +10,31 @@ $$ ============================================================
 lm m ac_client
 .echo
 
-.echo === LocalPlayer candidates (compare which deref looks like a player struct) ===
-.echo verified::kLocalPlayerBase  (ac_client + 0x17E0A8) ->
-dd ac_client+0x17E0A8 L1
-.echo a200k::kDirectCurrentPlayer (ac_client + 0x109B74) ->
+.echo === LocalPlayer probe ===
+.echo verified::kLocalPlayerBase (ac_client + 0x109B74) ->
 dd ac_client+0x109B74 L1
 .echo
-
-.echo === Health / armor probes ===
-.echo health via verified chain (*LocalPlayer + 0xEC, default ~100):
-dd poi(ac_client+0x17E0A8)+0xEC L1
-.echo armor  via verified chain (*LocalPlayer + 0xF0):
-dd poi(ac_client+0x17E0A8)+0xF0 L1
-.echo health via a200k chain   (default ~100):
-dd poi(ac_client+0x109B74)+0xEC L1
-.echo armor  via a200k chain:
-dd poi(ac_client+0x109B74)+0xF0 L1
+.echo === Health / armor (verified-live offsets) ===
+.echo health (*LocalPlayer + 0xBC):
+dd poi(ac_client+0x109B74)+0xBC L1
+.echo armor  (*LocalPlayer + 0xC0):
+dd poi(ac_client+0x109B74)+0xC0 L1
+.echo health backup (+0xD0, should match +0xBC):
+dd poi(ac_client+0x109B74)+0xD0 L1
+.echo armor backup  (+0xD4, should match +0xC0):
+dd poi(ac_client+0x109B74)+0xD4 L1
+.echo
+.echo === Position floats (+0x04..+0x0C) ===
+dd poi(ac_client+0x109B74)+0x04 L3
+.echo (interpret each as IEEE-754 single in WinDbg: ?? *(float*)<addr>)
+.echo
+.echo === Yaw/pitch/roll candidates ===
+.echo offset 0x40 (yaw candidate):
+dd poi(ac_client+0x109B74)+0x40 L1
+.echo offset 0x44 (pitch candidate):
+dd poi(ac_client+0x109B74)+0x44 L1
+.echo offset 0x48 (roll candidate):
+dd poi(ac_client+0x109B74)+0x48 L1
 .echo
 
 .echo === Misc A200K statics ===
@@ -52,4 +61,4 @@ db ac_client+0x63786 L0n12
 db ac_client+0x63378 L4
 .echo
 
-.echo === Done. q to quit. ===
+.echo === Done. qd to detach (NEVER use q -- it kills the game). ===

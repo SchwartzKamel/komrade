@@ -1,4 +1,5 @@
-// HackAnyGame.cpp : External trainer for AssaultCube 1.2.0.2 (ac_client.exe).
+// komrade.cpp : Kernel-Outside Memory Reader And Debug Engine
+//   External trainer for AssaultCube 1.2.0.2 (ac_client.exe, x86).
 // Scope: offline / single-player / LAN / private-server use only.
 //
 // Verified call sites (AC 1.2.0.2): see offsets.h (offs::verified::*).
@@ -283,7 +284,13 @@ static int RunTrainer()
 		}
 	}
 
-	std::cout << "Trainer ready.\n"
+	std::cout << "\n"
+	          << "  __ _____  __  __ ___   ___    ___  ____\n"
+	          << " / //_/ _ \\/  |/  / _ \\ / _ | / _ \\/ __/\n"
+	          << "/ ,< / // / /|_/ / , _// __ |/ // / _/  \n"
+	          << "_/|_|\\___/_/  /_/_/|_|/_/ |_/____/___/  \n"
+	          << "                       AC 1.2.0.2 trainer\n\n"
+	          << "Komrade ready.\n"
 	          << "  NUMPAD0 : freeze health\n"
 	          << "  NUMPAD1 : freeze armor\n"
 	          << "  F2      : ammo no-decrement\n"
@@ -360,7 +367,7 @@ static int RunTrainer()
 	}
 
 	CloseHandle(hProcess);
-	std::cout << "Trainer exited cleanly.\n";
+	std::cout << "Komrade exited cleanly.\n";
 	return 0;
 }
 

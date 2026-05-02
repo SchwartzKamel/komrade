@@ -22,7 +22,7 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{8a2c77e1-e0be-4602-b9b1-b55ee31e9699}</ProjectGuid>
-    <RootNamespace>HackAnyGame</RootNamespace>
+    <RootNamespace>komrade</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -133,7 +133,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="HackAnyGame.cpp" />
+    <ClCompile Include="komrade.cpp" />
     <ClCompile Include="mem.cpp" />
     <ClCompile Include="proc.cpp" />
   </ItemGroup>

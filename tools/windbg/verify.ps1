@@ -10,8 +10,12 @@
     pwsh tools\windbg\verify.ps1 -ProcessId 1234 -Script dump_patch_context.txt -OutFile sites.txt
 
 .NOTES
-    cdb is part of the Windows SDK Debugging Tools. Install via
-    "Windows 10/11 SDK" -> "Debugging Tools for Windows" feature.
+    cdb.exe is found inside the WinDbg Preview Store package
+    (winget install Microsoft.WinDbg) or the Windows SDK Debugging Tools.
+
+    *** ALWAYS detach with `qd`, never `q`.  cdb's `q` TERMINATES the
+        attached process — it will close AssaultCube.  This wrapper appends
+        `qd` automatically; just make sure your scripts don't end with `q`.
 #>
 param(
     [int] $ProcessId = 0,
@@ -23,16 +27,30 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
 # Resolve cdb.exe (x86 first — the target is 32-bit ac_client.exe).
+# WinDbg Preview (winget install Microsoft.WinDbg) ships cdb.exe inside its
+# Store package; we find it dynamically because the version is in the path.
 $cdbCandidates = @(
     "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x86\cdb.exe",
     "${env:ProgramFiles}\Windows Kits\10\Debuggers\x86\cdb.exe",
     "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe",
     "${env:ProgramFiles}\Windows Kits\10\Debuggers\x64\cdb.exe"
 )
+# Search WinDbg Preview install for x86 cdb. WindowsApps is ACL-locked so we
+# can't enumerate the parent or expand wildcards — but Get-AppxPackage works.
+try {
+    $pkg = Get-AppxPackage -Name 'Microsoft.WinDbg' -ErrorAction SilentlyContinue
+    if ($pkg -and $pkg.InstallLocation) {
+        $cdbCandidates += @(
+            (Join-Path $pkg.InstallLocation 'x86\cdb.exe'),
+            (Join-Path $pkg.InstallLocation 'amd64\cdb.exe')
+        )
+    }
+} catch {}
 $cdb = $cdbCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cdb) {
-    throw "cdb.exe not found. Install Debugging Tools for Windows (Windows SDK)."
+    throw "cdb.exe not found. Either install Debugging Tools for Windows (Windows SDK) or 'winget install Microsoft.WinDbg'."
 }
+Write-Verbose "Using cdb at: $cdb"
 
 # Resolve target PID.
 if ($ProcessId -eq 0) {
@@ -46,11 +64,12 @@ if ($ProcessId -eq 0) {
 $scriptPath = if (Test-Path $Script) { (Resolve-Path $Script).Path } else { Join-Path $here $Script }
 if (-not (Test-Path $scriptPath)) { throw "Script not found: $Script" }
 
-$args = @('-p', $ProcessId, '-cf', $scriptPath, '-lines')
+$initCmd = "`$`$<$scriptPath; qd"
+$cdbArgs = @('-p', $ProcessId, '-c', $initCmd, '-lines', '-Q')
 
 if ($OutFile) {
-    & $cdb @args | Tee-Object -FilePath $OutFile
+    & $cdb @cdbArgs *>&1 | Tee-Object -FilePath $OutFile
     Write-Host "Output written to $OutFile"
 } else {
-    & $cdb @args
+    & $cdb @cdbArgs
 }

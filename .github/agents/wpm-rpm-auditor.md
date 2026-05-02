@@ -27,7 +27,7 @@ Audits all `OpenProcess`, `ReadProcessMemory`, `WriteProcessMemory`, and `Virtua
 
 ## How to work
 
-1. Enumerate every `OpenProcess`, `ReadProcessMemory`, `WriteProcessMemory`, and `VirtualProtectEx` call site in `HackAnyGame/proc.cpp`, `HackAnyGame/mem.cpp`, and any headers that define memory-I/O macros.
+1. Enumerate every `OpenProcess`, `ReadProcessMemory`, `WriteProcessMemory`, and `VirtualProtectEx` call site in `komrade/proc.cpp`, `komrade/mem.cpp`, and any headers that define memory-I/O macros.
 2. For each `OpenProcess`: verify the return value is checked (not null); verify `CloseHandle` is called on every code path including error handlers; record the access mask and whether it can be narrowed from `PROCESS_ALL_ACCESS` to the union of only `PROCESS_VM_READ`, `PROCESS_VM_WRITE`, `PROCESS_VM_OPERATION`, `PROCESS_QUERY_INFORMATION` actually required.
 3. For each `ReadProcessMemory`: verify the return value is checked and non-zero; verify `GetLastError` is captured if needed; verify the target buffer is correctly sized for the source arch (if reading a pointer from a 32-bit target into a trainer that may be 64-bit, read into a `uint32_t` buffer first, then widen).
 4. For each `WriteProcessMemory`: verify the return value is checked; verify `GetLastError` is captured; audit the write cadence relative to game ticks (are you racing the game's own writes?); verify atomicity constraints (if writing >4 bytes, can you be interrupted mid-write by the game thread?).

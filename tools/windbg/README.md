@@ -1,23 +1,41 @@
 # WinDbg verification scripts
 
-These scripts attach `cdb.exe` (console-mode WinDbg, ships with the Windows SDK
-Debugging Tools) to a live `ac_client.exe` and dump everything our trainer
-relies on. They turn the speculative `// UNVERIFIED:` entries in
-`HackAnyGame/offsets.h` into either confirmed values or known-bad ones, and
-they widen the seed signatures in `HackAnyGame/sigs.h` so `mem::AobScan` can
-return exactly-one-match across AC rebuilds.
+These scripts attach `cdb.exe` (console-mode WinDbg) to a live `ac_client.exe`
+and dump everything our trainer relies on. They turn the speculative
+`// UNVERIFIED:` entries in `komrade/offsets.h` into either confirmed values
+or known-bad ones, and they widen the seed signatures in `komrade/sigs.h` so
+`mem::AobScan` can return exactly-one-match across AC rebuilds.
+
+## ⚠️ Critical safety note
+
+**Always detach with `qd`, never `q`.**  In cdb, `q` *terminates* the attached
+process — it will close AssaultCube and possibly cost you a match.  The
+`verify.ps1` wrapper appends `qd` automatically; if you author a new `.txt`
+script, end it with `.echo === done ===` (no `q`) and let the wrapper append
+the detach command.
+
+If you must run cdb manually, type `qd` (or `.detach`) at the prompt to
+disconnect cleanly.
 
 ## Setup
 
-1. Install the **Windows 10/11 SDK** with the *Debugging Tools for Windows*
-   feature checked. `cdb.exe` will land in:
+`cdb.exe` ships in two places — pick whichever you have:
 
-   ```
-   C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe
-   ```
+```
+# 1. WinDbg Preview (winget install Microsoft.WinDbg)  -- recommended; smaller install
+%ProgramFiles%\WindowsApps\Microsoft.WinDbg_<ver>_x64__8wekyb3d8bbwe\x86\cdb.exe
 
-2. Launch AssaultCube into a known-good state (e.g. fresh spawn on `ac_desert`,
-   default rifle, full clip) so probed values are predictable.
+# 2. Windows 10/11 SDK with "Debugging Tools for Windows" feature
+%ProgramFiles(x86)%\Windows Kits\10\Debuggers\x86\cdb.exe
+```
+
+`verify.ps1` finds either automatically (uses `Get-AppxPackage` for the Store
+package since `WindowsApps\` is ACL-locked against directory enumeration).
+
+The **x86** build of cdb is required because `ac_client.exe` is 32-bit.
+
+Launch AssaultCube **into a match** (LocalPlayer is null in the menu) before
+running any script.
 
 ## Scripts
 

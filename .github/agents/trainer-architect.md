@@ -29,7 +29,7 @@ Owns the AssaultCube external trainer's overall structure and maintainability. R
 
 ## How to work
 
-1. **Read the current code end-to-end.** Load `HackAnyGame/HackAnyGame.cpp`, `HackAnyGame.h`, and any memory utility headers. Understand the current `recoil_delete()` loop, hotkey dispatch, feature state (booleans), and freeze-write logic.
+1. **Read the current code end-to-end.** Load `komrade/komrade.cpp`, the memory headers, and any helpers. Understand the current `RunTrainer()` loop, hotkey dispatch, feature state (atomic bools), and freeze-write logic.
 2. **Enumerate every feature.** List each toggle by name (health, armor, rifle ammo, SMG ammo, sniper ammo, shotgun ammo, pistol ammo, grenade ammo, fast rifle, fast sniper, fast shotgun, fast-fire, auto-shoot, FOV). For each: address, on-bytes (frozen value), off-bytes (original/restore value), hotkey, label, and whether it writes on each loop or one-shot.
 3. **Design the `Feature` struct and enum.** Create a `struct Feature { const char *label; uintptr_t addr; BYTE onValue; BYTE offValue; int vkey; bool enabled; }` (or similar). Create an `enum FeatureId { FEATURE_HEALTH, FEATURE_ARMOR, ... }` and a `Feature features[NUM_FEATURES]` lookup table.
 4. **Centralize hotkey input dispatch.** Extract `GetAsyncKeyState(vkey) & 1` into a helper function. Use an array of `{ vkey, FeatureId }` pairs or a loop over `features[]` to check each hotkey exactly once per `recoil_delete()` iteration. Implement edge-trigger logic (toggle on keydown, not every frame).

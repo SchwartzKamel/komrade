@@ -21,7 +21,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="HackAnyGame.cpp">
+    <ClCompile Include="komrade.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="proc.cpp">

@@ -1,6 +1,6 @@
 $$ ============================================================
 $$ Dump 64 bytes of context around each code-patch site so the
-$$ short seed signatures in HackAnyGame/sigs.h can be widened.
+$$ short seed signatures in komrade/sigs.h can be widened.
 $$
 $$   cdb -p <PID> -cf dump_patch_context.txt -lines > sites.txt
 $$
