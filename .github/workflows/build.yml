@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+    branches: [master, dev]
+
+jobs:
+  build:
+    name: Build x86 Debug & Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore komrade.sln
+
+      - name: Build Debug x86
+        run: |
+          msbuild komrade.sln /p:Configuration=Debug /p:Platform=Win32 /v:minimal
+
+      - name: Build Release x86
+        run: |
+          msbuild komrade.sln /p:Configuration=Release /p:Platform=Win32 /v:minimal
+
+      - name: Upload Debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: komrade-debug-x86
+          path: Debug/komrade.exe
+          if-no-files-found: error
+
+      - name: Upload Release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: komrade-release-x86
+          path: Release/komrade.exe
+          if-no-files-found: error
