@@ -22,6 +22,7 @@ _/|_|\___/_/  /_/_/|_|/_/ |_/____/___/
 |-------------|------------------------------|----------------------|
 | `NUMPAD0`   | Freeze health (live-verified) | Periodic `WriteProcessMemory` to `*LocalPlayer + 0xBC` |
 | `NUMPAD1`   | Freeze armor                 | Same, `+ 0xC0`       |
+| `NUMPAD2`   | Aimbot (closest live enemy)  | Heap-scan playerent-shaped structs; write yaw/pitch to `*LocalPlayer + 0x40 / +0x44` every 20 ms |
 | `F2`        | Ammo no-decrement            | Code patch at `ac_client+0x637E9`: `FF 0E` → `FF 06` |
 | `F3`        | No recoil                    | 10-byte NOP slide at `ac_client+0x63786` |
 | `F4`        | Grenade no-decrement         | `FF 08` → `90 90` at `ac_client+0x63378` |

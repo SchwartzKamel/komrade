@@ -46,6 +46,19 @@ namespace offs
         inline constexpr unsigned  kHealthChain[]     = { 0xBC };
         inline constexpr unsigned  kArmorChain[]      = { 0xC0 };
 
+        // VERIFIED LIVE 2026-05 (validate_all.ps1 13/13 PASS):
+        //   *LocalPlayer +0x04..+0x0C = world position (X,Y,Z floats)
+        //   *LocalPlayer +0x40        = yaw   in [0,360)
+        //   *LocalPlayer +0x44        = pitch in [-90,90]
+        //   *LocalPlayer +0x48        = roll  in [-90,90]
+        // The older 0x34/0x38 yaw/pitch cite is wrong for AC 1.2.0.2.
+        inline constexpr unsigned  kPlayerPosXChain[] = { 0x04 };
+        inline constexpr unsigned  kPlayerPosYChain[] = { 0x08 };
+        inline constexpr unsigned  kPlayerPosZChain[] = { 0x0C };
+        inline constexpr unsigned  kViewYawChain[]    = { 0x40 };
+        inline constexpr unsigned  kViewPitchChain[]  = { 0x44 };
+        inline constexpr unsigned  kViewRollChain[]   = { 0x48 };
+
         // Code patch sites (module-relative).
         inline constexpr uintptr_t kAmmoDecSite       = 0x637E9;   // FF 0E -> FF 06 inverts
         inline constexpr uintptr_t kRecoilCallSite    = 0x63786;   // 10-byte NOP slide  (== a200k::kPatchRecoil)

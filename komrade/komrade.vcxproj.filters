@@ -44,5 +44,8 @@
     <ClInclude Include="mem.h">
       <Filter>mem</Filter>
     </ClInclude>
+    <ClInclude Include="aimbot.h">
+      <Filter>mem</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -18,6 +18,7 @@
 #include "mem.h"
 #include "offsets.h"
 #include "sigs.h"
+#include "aimbot.h"
 
 namespace {
 
@@ -293,13 +294,35 @@ static int RunTrainer()
 	          << "Komrade ready.\n"
 	          << "  NUMPAD0 : freeze health\n"
 	          << "  NUMPAD1 : freeze armor\n"
+	          << "  NUMPAD2 : aimbot (closest live enemy by heap-scan)\n"
 	          << "  F2      : ammo no-decrement\n"
 	          << "  F3      : no recoil\n"
 	          << "  F4      : grenade no-decrement\n"
 	          << "  NUMPAD9 : exit (restores all patches)\n";
 
-	// ----- Freeze worker thread -----------------------------------------
+	// ----- Aimbot worker thread (Tier 3) --------------------------------
+	std::atomic<bool> aimbotOn(false);
+	aimbot::Aimbot aimbotEngine(hProcess, moduleBase);
 	std::atomic<bool> g_running(true);
+	std::thread aimbotWorker([&]() {
+		int loggedCount = -1;
+		while (g_running.load(std::memory_order_acquire))
+		{
+			if (aimbotOn.load(std::memory_order_acquire))
+			{
+				aimbotEngine.Tick();
+				int n = (int)aimbotEngine.LastCandidateCount();
+				if (n != loggedCount)
+				{
+					std::cout << "[Aimbot] tracking " << n << " candidate(s).\n";
+					loggedCount = n;
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		}
+	});
+
+	// ----- Freeze worker thread -----------------------------------------
 	std::thread freezeWorker([&]() {
 		while (g_running.load(std::memory_order_acquire))
 		{
@@ -321,6 +344,13 @@ static int RunTrainer()
 	while (GetExitCodeProcess(hProcess, &dwExit) && dwExit == STILL_ACTIVE)
 	{
 		if (KeyPressed(VK_NUMPAD9)) break;
+
+		if (KeyPressed(VK_NUMPAD2))
+		{
+			const bool now = !aimbotOn.load();
+			aimbotOn.store(now, std::memory_order_release);
+			std::cout << "Aimbot: " << (now ? "ON" : "OFF") << std::endl;
+		}
 
 		for (int i = 0; i < F_COUNT; ++i)
 		{
@@ -355,6 +385,7 @@ static int RunTrainer()
 	// ----- Clean exit ---------------------------------------------------
 	g_running.store(false, std::memory_order_release);
 	if (freezeWorker.joinable()) freezeWorker.join();
+	if (aimbotWorker.joinable()) aimbotWorker.join();
 
 	// Restore any active code patches so the game stays sane.
 	for (int i = 0; i < F_COUNT; ++i)
