@@ -65,7 +65,7 @@ $scriptPath = if (Test-Path $Script) { (Resolve-Path $Script).Path } else { Join
 if (-not (Test-Path $scriptPath)) { throw "Script not found: $Script" }
 
 $initCmd = "`$`$<$scriptPath; qd"
-$cdbArgs = @('-p', $ProcessId, '-c', $initCmd, '-lines', '-Q')
+$cdbArgs = @('-p', $ProcessId, '-c', $initCmd, '-lines')
 
 if ($OutFile) {
     & $cdb @cdbArgs *>&1 | Tee-Object -FilePath $OutFile

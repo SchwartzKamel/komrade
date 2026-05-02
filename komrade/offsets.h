@@ -122,14 +122,20 @@ namespace offs
         // active weapon's clip ammo.
         inline constexpr unsigned  kCurrentWeaponAmmoChain[] = { 0x374, 0x14, 0x0 };
 
-        // UNVERIFIED: view yaw / pitch on LocalPlayer. Public AC tutorials
-        // commonly cite these. Useful for aimbot/silent-aim.
-        // TODO: rotate view in-game and watch for value mutation.
-        inline constexpr unsigned  kViewYawChain[]   = { 0x34 };
-        inline constexpr unsigned  kViewPitchChain[] = { 0x38 };
+        // VERIFIED LIVE 2025-XX (cdb dump, ac_iceroad menu BG):
+        //   +0x40 = 272.0  (yaw, in [0,360])
+        //   +0x44 = 0.0    (pitch, in [-90,90])
+        //   +0x48 = 0.0    (roll)
+        // The older 0x34/0x38 cite is wrong for AC 1.2.0.2 — those offsets
+        // sit inside the head-position vec3 (+0x34..+0x3C).
+        inline constexpr unsigned  kViewYawChain[]   = { 0x40 };
+        inline constexpr unsigned  kViewPitchChain[] = { 0x44 };
+        inline constexpr unsigned  kViewRollChain[]  = { 0x48 };
 
-        // UNVERIFIED: player position vec3 (X/Y/Z floats) on LocalPlayer.
-        // TODO: walk the player and watch for monotonic mutation.
+        // VERIFIED LIVE 2025-XX (cdb dump): position vec3 at +0x04..+0x0C.
+        //   +0x04 = X (e.g. 360.5)
+        //   +0x08 = Y (e.g. 371.0)
+        //   +0x0C = Z (e.g. 8.5)
         inline constexpr unsigned  kPlayerPosXChain[] = { 0x4 };
         inline constexpr unsigned  kPlayerPosYChain[] = { 0x8 };
         inline constexpr unsigned  kPlayerPosZChain[] = { 0xC };
