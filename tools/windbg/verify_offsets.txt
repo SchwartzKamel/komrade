@@ -1,0 +1,55 @@
+$$ ============================================================
+$$ AssaultCube 1.2.0.2 offset verification script
+$$ Run against a live ac_client.exe via cdb / WinDbg:
+$$   cdb -p <PID> -cf verify_offsets.txt -lines
+$$ Or from the wrapper:
+$$   pwsh tools\windbg\verify.ps1 -Pid <PID>
+$$ ============================================================
+.lines -e
+.echo === Module info ===
+lm m ac_client
+.echo
+
+.echo === LocalPlayer candidates (compare which deref looks like a player struct) ===
+.echo verified::kLocalPlayerBase  (ac_client + 0x17E0A8) ->
+dd ac_client+0x17E0A8 L1
+.echo a200k::kDirectCurrentPlayer (ac_client + 0x109B74) ->
+dd ac_client+0x109B74 L1
+.echo
+
+.echo === Health / armor probes ===
+.echo health via verified chain (*LocalPlayer + 0xEC, default ~100):
+dd poi(ac_client+0x17E0A8)+0xEC L1
+.echo armor  via verified chain (*LocalPlayer + 0xF0):
+dd poi(ac_client+0x17E0A8)+0xF0 L1
+.echo health via a200k chain   (default ~100):
+dd poi(ac_client+0x109B74)+0xEC L1
+.echo armor  via a200k chain:
+dd poi(ac_client+0x109B74)+0xF0 L1
+.echo
+
+.echo === Misc A200K statics ===
+.echo FovY (float, default ~90.0):
+dd ac_client+0x101BAC L1
+.echo Current map name:
+da ac_client+0x109EC0
+.echo Game mode:
+dd ac_client+0x10F49C L1
+.echo Last millis:
+dd ac_client+0x109EAC L1
+.echo Edit mode:
+db ac_client+0x10A1AB L1
+.echo Entity list head ptr:
+dd ac_client+0x110118 L1
+.echo
+
+.echo === Patch sites (verify expected opcodes) ===
+.echo Ammo dec site (expect FF 0E = dec [esi]):
+db ac_client+0x637E9 L4
+.echo Recoil call site (expect 50 8D 4C 24 1C 8B CE FF D2 ..):
+db ac_client+0x63786 L0n12
+.echo Grenade dec site (expect FF 08 = dec [eax]):
+db ac_client+0x63378 L4
+.echo
+
+.echo === Done. q to quit. ===

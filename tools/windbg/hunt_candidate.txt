@@ -1,0 +1,46 @@
+$$ ============================================================
+$$ Probe candidate (UNVERIFIED) offsets from offsets.h::candidate.
+$$ Run while the player is alive, in a known posture, with a
+$$ predictable weapon clip count (e.g. fresh spawn = 20 rifle).
+$$
+$$   cdb -p <PID> -cf hunt_candidate.txt -lines
+$$
+$$ Cross-check both LocalPlayer roots so we can pin down which
+$$ static is the real one.
+$$ ============================================================
+.lines -e
+
+.echo === Pick whichever LocalPlayer root makes health look right ===
+r $t0 = poi(ac_client+0x17E0A8)
+r $t1 = poi(ac_client+0x109B74)
+.printf "verified root  = %p\n", @$t0
+.printf "a200k    root  = %p\n", @$t1
+.echo
+
+.echo === Current weapon ammo chain {0x374,0x14,0x0} from each root ===
+dd poi(poi(@$t0+0x374)+0x14) L1
+dd poi(poi(@$t1+0x374)+0x14) L1
+.echo
+
+.echo === View yaw/pitch (floats at 0x34 / 0x38) ===
+.echo verified yaw / pitch:
+dd @$t0+0x34 L2
+.echo a200k    yaw / pitch:
+dd @$t1+0x34 L2
+.echo
+
+.echo === Player position vec3 (0x4 / 0x8 / 0xC, floats) ===
+.echo verified:
+dd @$t0+0x4 L3
+.echo a200k:
+dd @$t1+0x4 L3
+.echo
+
+.echo === Player name at +0x225 ===
+.echo verified:
+da @$t0+0x225
+.echo a200k:
+da @$t1+0x225
+.echo
+
+.echo === Done — whichever root produced sensible numbers is the one to keep. ===

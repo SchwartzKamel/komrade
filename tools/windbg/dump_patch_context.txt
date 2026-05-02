@@ -1,0 +1,40 @@
+$$ ============================================================
+$$ Dump 64 bytes of context around each code-patch site so the
+$$ short seed signatures in HackAnyGame/sigs.h can be widened.
+$$
+$$   cdb -p <PID> -cf dump_patch_context.txt -lines > sites.txt
+$$
+$$ The output is what pattern-scanner needs to pick a unique
+$$ AOB signature (mask volatile bytes — relative call/jmp
+$$ displacements, immediate fields that move across builds).
+$$ ============================================================
+.lines -e
+
+.echo === Ammo dec site (kAmmoDecSite = 0x637E9) ===
+.echo 32 bytes BEFORE:
+db ac_client+0x637E9-0x20 L0x20
+.echo Site (8 bytes from FF 0E):
+db ac_client+0x637E9 L8
+.echo 32 bytes AFTER:
+db ac_client+0x637E9+8 L0x20
+.echo
+
+.echo === Recoil call site (kRecoilCallSite = 0x63786) ===
+.echo 32 bytes BEFORE:
+db ac_client+0x63786-0x20 L0x20
+.echo Site (16 bytes from 50 8D 4C 24 1C ..):
+db ac_client+0x63786 L0x10
+.echo 32 bytes AFTER:
+db ac_client+0x63786+0x10 L0x20
+.echo
+
+.echo === Grenade dec site (kGrenadeDecSite = 0x63378) ===
+.echo 32 bytes BEFORE:
+db ac_client+0x63378-0x20 L0x20
+.echo Site (8 bytes from FF 08):
+db ac_client+0x63378 L8
+.echo 32 bytes AFTER:
+db ac_client+0x63378+8 L0x20
+.echo
+
+.echo === Done. ===

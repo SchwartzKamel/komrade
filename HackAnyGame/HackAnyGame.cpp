@@ -1,228 +1,372 @@
-// HackAnyGame.cpp : This file contains the 'main' function. Program execution begins and ends there.
+// HackAnyGame.cpp : External trainer for AssaultCube 1.2.0.2 (ac_client.exe).
+// Scope: offline / single-player / LAN / private-server use only.
 //
+// Verified call sites (AC 1.2.0.2): see offsets.h (offs::verified::*).
+//   LocalPlayer  = moduleBase + kLocalPlayerBase   (pointer to local player struct)
+//   health       = *LocalPlayer + kHealthChain
+//   armor        = *LocalPlayer + kArmorChain
+//   ammo dec/inc = moduleBase + kAmmoDecSite       (FF 0E -> FF 06 to invert)
+//   recoil call  = moduleBase + kRecoilCallSite    (10-byte sequence -> NOPs)
+//   grenade dec  = moduleBase + kGrenadeDecSite    (FF 08 -> 90 90)
 
 #include "stdafx.h"
+#include <atomic>
+#include <thread>
+#include <chrono>
 #include "proc.h"
 #include "mem.h"
+#include "offsets.h"
+#include "sigs.h"
 
+namespace {
+
+	// Original bytes for code patches, used to restore on toggle-off / clean exit.
+	constexpr BYTE kAmmoOriginal[2]    = { 0xFF, 0x0E };               // dec [esi]
+	constexpr BYTE kAmmoPatched[2]     = { 0xFF, 0x06 };               // inc [esi]
+	constexpr BYTE kRecoilOriginal[10] = { 0x50, 0x8D, 0x4C, 0x24, 0x1C, 0x8B, 0xCE, 0xFF, 0xD2, 0x90 };
+	constexpr BYTE kRecoilNop[10]      = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
+	constexpr BYTE kGrenadeOriginal[2] = { 0xFF, 0x08 };               // dec [eax]
+	constexpr BYTE kGrenadeNop[2]      = { 0x90, 0x90 };
+
+	constexpr int  kFreezeValue = 1337;
+
+	// Minimum access mask the trainer actually needs.
+	constexpr DWORD kAccessMask =
+		PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION;
+
+	bool KeyPressed(int vk)
+	{
+		// Edge-trigger: returns true once per physical key press.
+		return (GetAsyncKeyState(vk) & 1) != 0;
+	}
+
+	enum class FeatureKind { CodePatch, FreezeWrite };
+
+	// One row per feature. Hotkey, kind, and payload colocated.
+	struct Feature
+	{
+		const char*       name;
+		int               hotkey;       // VK_*
+		FeatureKind       kind;
+
+		// CodePatch payload (kind == CodePatch).
+		uintptr_t         siteOffset;   // module-relative seed; resolved to siteAddr at startup.
+		uintptr_t         siteAddr;     // absolute, resolved (AobScan or moduleBase + siteOffset).
+		const BYTE*       originalBytes;
+		const BYTE*       patchedBytes; // toggle-on bytes
+		size_t            patchLen;
+
+		// AOB seed for fallback-aware resolution (CodePatch only).
+		const BYTE*       sigPattern;
+		const char*       sigMask;
+		size_t            sigLen;
+
+		// FreezeWrite payload (kind == FreezeWrite).
+		uintptr_t         freezeAddr;   // resolved at startup; 0 = unresolved/skip
+		const void*       freezeValue;
+		size_t            freezeSize;
+
+		std::atomic<bool> enabled;
+	};
+
+	// Resolve a code-patch site: try AobScan first, fall back to moduleBase+offset.
+	// Logs which path was used and warns if AobScan diverges from the hard-coded site.
+	uintptr_t ResolveCodeSite(Feature& f,
+	                          HANDLE hProcess,
+	                          uintptr_t moduleBase,
+	                          size_t moduleSize)
+	{
+		const uintptr_t fallback = moduleBase + f.siteOffset;
+		uintptr_t scanned = 0;
+		if (f.sigPattern && f.sigMask && f.sigLen)
+		{
+			scanned = mem::AobScan(hProcess, moduleBase, moduleSize,
+			                       f.sigPattern, f.sigMask, f.sigLen);
+		}
+
+		if (scanned == 0)
+		{
+			std::cout << "[" << f.name << "] AobScan: no match (seed signature is non-unique by design); "
+			          << "using hard-coded offset 0x" << std::hex << f.siteOffset << std::dec << ".\n";
+			return fallback;
+		}
+
+		if (scanned != fallback)
+		{
+			std::cerr << "[" << f.name << "] WARNING: AobScan match 0x" << std::hex << scanned
+			          << " diverges from hard-coded site 0x" << fallback
+			          << " — possible AC build drift. Using hard-coded site.\n" << std::dec;
+			return fallback;
+		}
+
+		std::cout << "[" << f.name << "] AobScan: match at 0x" << std::hex << scanned
+		          << " (matches hard-coded site).\n" << std::dec;
+		return scanned;
+	}
+
+}
+
+// Demo: read & write the ammo value via a resolved pointer chain.
 static int leet_ammo()
 {
-	//Get ProcID of the target process
 	DWORD procID = GetProcID(L"ac_client.exe");
+	if (!procID)
+	{
+		std::cout << "ac_client.exe not running.\n";
+		return 1;
+	}
 
-	//Getmodulebaseaddress
 	uintptr_t moduleBase = GetModuleBaseAddress(procID, L"ac_client.exe");
+	if (!moduleBase)
+	{
+		std::cout << "Failed to resolve module base.\n";
+		return 1;
+	}
 
-	//Get Handle to Process
-	HANDLE hProcess = 0;
-	hProcess = OpenProcess(PROCESS_ALL_ACCESS, NULL, procID);
+	HANDLE hProcess = OpenProcess(kAccessMask, FALSE, procID);
+	if (!hProcess)
+	{
+		std::cout << "OpenProcess failed: " << GetLastError() << "\n";
+		return 1;
+	}
 
-	//Resolve base address of the pointer chain
-	uintptr_t dynamicPtrBaseAddr = moduleBase + 0x10f4f4;
+	uintptr_t dynamicPtrBaseAddr = moduleBase + 0x10F4F4;
+	std::cout << "DynamicPtrBaseAddr = 0x" << std::hex << dynamicPtrBaseAddr << std::endl;
 
-	std::cout << "DynamicPtrBaseAddr = " << "0x" << std::hex << dynamicPtrBaseAddr << std::endl;
-
-	//Resolve our ammo pointer chain
 	std::vector<unsigned int> ammoOffsets = { 0x374, 0x14, 0x0 };
 	uintptr_t ammoAddr = FindDMAAddy(hProcess, dynamicPtrBaseAddr, ammoOffsets);
+	std::cout << "ammoAddr = 0x" << std::hex << ammoAddr << std::endl;
 
-	std::cout << "ammoAddr = " << "0x" << std::hex << ammoAddr << std::endl;
-
-	//Read Ammo value
 	int ammoValue = 0;
+	if (ReadProcessMemory(hProcess, (BYTE*)ammoAddr, &ammoValue, sizeof(ammoValue), nullptr))
+	{
+		std::cout << "Current ammo = " << std::dec << ammoValue << std::endl;
+	}
 
-	ReadProcessMemory(hProcess, (BYTE*)ammoAddr, &ammoValue, sizeof(ammoValue), nullptr);
-	std::cout << "Current ammo = " << std::dec << ammoValue << std::endl;
-
-	//Write to it
 	int newAmmo = 1337;
 	WriteProcessMemory(hProcess, (BYTE*)ammoAddr, &newAmmo, sizeof(newAmmo), nullptr);
 
-	//Read out again
-	ReadProcessMemory(hProcess, (BYTE*)ammoAddr, &ammoValue, sizeof(ammoValue), nullptr);
+	if (ReadProcessMemory(hProcess, (BYTE*)ammoAddr, &ammoValue, sizeof(ammoValue), nullptr))
+	{
+		std::cout << "New ammo = " << std::dec << ammoValue << std::endl;
+	}
 
-	std::cout << "New ammo = " << std::dec << ammoValue << std::endl;
-
-
-	getchar();
+	CloseHandle(hProcess);
 	return 0;
 }
 
-static int recoil_delete()
+// Main trainer loop: hotkey-driven freezes and code patches.
+static int RunTrainer()
 {
-	HANDLE hProcess = 0;
-
-	uintptr_t moduleBase = 0, localPlayerPtr = 0, healthAddr = 0, armorAddr = 0;
-	uintptr_t rifleAmmoAddr = 0, smgAmmoAddr = 0, sniperAmmoAddr = 0, shotgunAmmoAddr = 0, pistolAmmoAddr = 0, grenadeAmmoAddr = 0;
-	uintptr_t fastRifleAddr = 0, fastSniperAddr = 0, fastShotgunAddr = 0;
-	uintptr_t autoShootAddr = 0;
-	uintptr_t fovAddr = 0;
-	bool bHealth = false, bArmor = false, bAmmo = false, bRecoil = false, bFastFire = false, bAutoShoot = false, bFovChange = false; // Added bFovChange
-
-	const int freezeValue = 1337; // Value to freeze health/armor at
-	const int ammoFreezeValue = 999; // Value to freeze ammo at
-	const int fastFireValue = 0; // Value to write for fast fire (usually 0)
-	const int autoShootValueOn = 1; // Value to write for auto shoot ON
-	const int autoShootValueOff = 0; // Value to write for auto shoot OFF
-	const float newFovValue = 110.0f; // Desired FOV value
-	const float defaultFovValue = 90.0f; // Default FOV value (adjust if needed)
-
 	DWORD procID = GetProcID(L"ac_client.exe");
-
-	if (procID)
+	if (!procID)
 	{
-		hProcess = OpenProcess(PROCESS_ALL_ACCESS, NULL, procID);
-
-		moduleBase = GetModuleBaseAddress(procID, L"ac_client.exe");
-
-		// Updated LocalPlayer offset
-		localPlayerPtr = moduleBase + 0x0017E0A8;
-
-		// Get addresses for health and armor using new offsets
-		// Note: These are direct offsets from the LocalPlayer pointer, not multi-level pointers in this case.
-		healthAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0xEC });
-		armorAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0xF0 });
-
-		// Get ammo addresses using new offsets
-		rifleAmmoAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0x140 });
-		smgAmmoAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0x138 });
-		sniperAmmoAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0x13C });
-		shotgunAmmoAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0x134 });
-		pistolAmmoAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0x12C });
-		grenadeAmmoAddr = FindDMAAddy(hProcess, localPlayerPtr, { 0x144 });
-	}
-	
-	else
-	{
-		std::cout << "Process not found, press enter to exit\n";
+		std::cerr << "ac_client.exe not running. Press enter to exit.\n";
 		getchar();
-		return 0;
+		return 1;
 	}
 
-	DWORD dwExit = 0;
+	HANDLE hProcess = OpenProcess(kAccessMask, FALSE, procID);
+	if (!hProcess)
+	{
+		std::cerr << "OpenProcess failed: " << GetLastError() << ". Press enter to exit.\n";
+		getchar();
+		return 1;
+	}
 
+	uintptr_t moduleBase = GetModuleBaseAddress(procID, L"ac_client.exe");
+	if (!moduleBase)
+	{
+		std::cerr << "Failed to resolve module base. Press enter to exit.\n";
+		CloseHandle(hProcess);
+		getchar();
+		return 1;
+	}
+
+	const size_t moduleSize = mem::GetModuleSize(procID, L"ac_client.exe");
+	if (!moduleSize)
+	{
+		std::cerr << "Failed to resolve module size; AobScan disabled.\n";
+	}
+
+	// Resolve freeze targets via the pointer chain.
+	const uintptr_t localPlayerPtr = moduleBase + offs::verified::kLocalPlayerBase;
+	const uintptr_t healthAddr = mem::DeepPointerEx(hProcess, localPlayerPtr, { offs::verified::kHealthChain[0] });
+	const uintptr_t armorAddr  = mem::DeepPointerEx(hProcess, localPlayerPtr, { offs::verified::kArmorChain[0]  });
+
+	// ----- Feature table ------------------------------------------------
+	// Order: health (NUMPAD0), armor (NUMPAD1), ammo (F2), recoil (F3), grenade (F4).
+	enum FeatureId { F_HEALTH = 0, F_ARMOR, F_AMMO, F_RECOIL, F_GRENADE, F_COUNT };
+
+	Feature features[F_COUNT];
+
+	// Freeze: health
+	features[F_HEALTH].name        = "Health Freeze";
+	features[F_HEALTH].hotkey      = VK_NUMPAD0;
+	features[F_HEALTH].kind        = FeatureKind::FreezeWrite;
+	features[F_HEALTH].freezeAddr  = healthAddr;
+	features[F_HEALTH].freezeValue = &kFreezeValue;
+	features[F_HEALTH].freezeSize  = sizeof(kFreezeValue);
+	features[F_HEALTH].enabled.store(false);
+
+	// Freeze: armor
+	features[F_ARMOR].name        = "Armor Freeze";
+	features[F_ARMOR].hotkey      = VK_NUMPAD1;
+	features[F_ARMOR].kind        = FeatureKind::FreezeWrite;
+	features[F_ARMOR].freezeAddr  = armorAddr;
+	features[F_ARMOR].freezeValue = &kFreezeValue;
+	features[F_ARMOR].freezeSize  = sizeof(kFreezeValue);
+	features[F_ARMOR].enabled.store(false);
+
+	// CodePatch: ammo no-decrement (FF 0E -> FF 06)
+	features[F_AMMO].name          = "Ammo Patch";
+	features[F_AMMO].hotkey        = VK_F2;
+	features[F_AMMO].kind          = FeatureKind::CodePatch;
+	features[F_AMMO].siteOffset    = offs::verified::kAmmoDecSite;
+	features[F_AMMO].originalBytes = kAmmoOriginal;
+	features[F_AMMO].patchedBytes  = kAmmoPatched;
+	features[F_AMMO].patchLen      = sizeof(kAmmoOriginal);
+	features[F_AMMO].sigPattern    = sigs::kAmmoDec;
+	features[F_AMMO].sigMask       = sigs::kAmmoDecMask;
+	features[F_AMMO].sigLen        = sizeof(sigs::kAmmoDec);
+	features[F_AMMO].enabled.store(false);
+
+	// CodePatch: no recoil (10-byte NOP slide)
+	features[F_RECOIL].name          = "Recoil Patch";
+	features[F_RECOIL].hotkey        = VK_F3;
+	features[F_RECOIL].kind          = FeatureKind::CodePatch;
+	features[F_RECOIL].siteOffset    = offs::verified::kRecoilCallSite;
+	features[F_RECOIL].originalBytes = kRecoilOriginal;
+	features[F_RECOIL].patchedBytes  = kRecoilNop;
+	features[F_RECOIL].patchLen      = sizeof(kRecoilOriginal);
+	features[F_RECOIL].sigPattern    = sigs::kRecoilCall;
+	features[F_RECOIL].sigMask       = sigs::kRecoilCallMask;
+	features[F_RECOIL].sigLen        = sizeof(sigs::kRecoilCall);
+	features[F_RECOIL].enabled.store(false);
+
+	// CodePatch: grenade no-decrement (FF 08 -> 90 90)
+	features[F_GRENADE].name          = "Grenade Patch";
+	features[F_GRENADE].hotkey        = VK_F4;
+	features[F_GRENADE].kind          = FeatureKind::CodePatch;
+	features[F_GRENADE].siteOffset    = offs::verified::kGrenadeDecSite;
+	features[F_GRENADE].originalBytes = kGrenadeOriginal;
+	features[F_GRENADE].patchedBytes  = kGrenadeNop;
+	features[F_GRENADE].patchLen      = sizeof(kGrenadeOriginal);
+	features[F_GRENADE].sigPattern    = sigs::kGrenadeDec;
+	features[F_GRENADE].sigMask       = sigs::kGrenadeDecMask;
+	features[F_GRENADE].sigLen        = sizeof(sigs::kGrenadeDec);
+	features[F_GRENADE].enabled.store(false);
+
+	// ----- Resolve / validate per-feature addresses ---------------------
+	for (int i = 0; i < F_COUNT; ++i)
+	{
+		Feature& f = features[i];
+		if (f.kind == FeatureKind::CodePatch)
+		{
+			if (moduleSize)
+			{
+				f.siteAddr = ResolveCodeSite(f, hProcess, moduleBase, moduleSize);
+			}
+			else
+			{
+				f.siteAddr = moduleBase + f.siteOffset;
+				std::cout << "[" << f.name << "] AobScan skipped (no module size); "
+				          << "using hard-coded offset.\n";
+			}
+		}
+		else
+		{
+			if (f.freezeAddr == 0)
+			{
+				std::cerr << "[" << f.name << "] freeze address unresolved; feature disabled.\n";
+			}
+		}
+	}
+
+	std::cout << "Trainer ready.\n"
+	          << "  NUMPAD0 : freeze health\n"
+	          << "  NUMPAD1 : freeze armor\n"
+	          << "  F2      : ammo no-decrement\n"
+	          << "  F3      : no recoil\n"
+	          << "  F4      : grenade no-decrement\n"
+	          << "  NUMPAD9 : exit (restores all patches)\n";
+
+	// ----- Freeze worker thread -----------------------------------------
+	std::atomic<bool> g_running(true);
+	std::thread freezeWorker([&]() {
+		while (g_running.load(std::memory_order_acquire))
+		{
+			for (int i = 0; i < F_COUNT; ++i)
+			{
+				Feature& f = features[i];
+				if (f.kind != FeatureKind::FreezeWrite) continue;
+				if (!f.enabled.load(std::memory_order_acquire)) continue;
+				if (f.freezeAddr == 0) continue;
+				mem::PatchEx((BYTE*)f.freezeAddr, (BYTE*)f.freezeValue,
+				             (unsigned)f.freezeSize, hProcess);
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	});
+
+	// ----- Main input loop ----------------------------------------------
+	DWORD dwExit = 0;
 	while (GetExitCodeProcess(hProcess, &dwExit) && dwExit == STILL_ACTIVE)
 	{
-		if (GetAsyncKeyState(VK_F1) & 1)
-		{
-			bHealth = !bHealth;
-			std::cout << "Health Freeze: " << (bHealth ? "ON" : "OFF") << std::endl;
-		}
-		if (GetAsyncKeyState(VK_F5) & 1) // Added hotkey for Armor
-		{
-			bArmor = !bArmor;
-			std::cout << "Armor Freeze: " << (bArmor ? "ON" : "OFF") << std::endl;
-		}
-		if (GetAsyncKeyState(VK_F2) & 1)
-		{
-			bAmmo = !bAmmo;
-			std::cout << "Ammo Freeze: " << (bAmmo ? "ON" : "OFF") << std::endl;
-			// Removed old patching logic, now just toggles the freeze
-		}
-		if (GetAsyncKeyState(VK_F3) & 1)
-		{
-			bRecoil = !bRecoil;
+		if (KeyPressed(VK_NUMPAD9)) break;
 
-			if (bRecoil)
+		for (int i = 0; i < F_COUNT; ++i)
+		{
+			Feature& f = features[i];
+			if (!KeyPressed(f.hotkey)) continue;
+
+			if (f.kind == FeatureKind::FreezeWrite)
 			{
-				mem::NopEx((BYTE*)(moduleBase + 0x63786), 10, hProcess);
+				if (f.freezeAddr == 0)
+				{
+					std::cerr << "[" << f.name << "] cannot toggle: address unresolved.\n";
+					continue;
+				}
+				const bool now = !f.enabled.load();
+				f.enabled.store(now, std::memory_order_release);
+				std::cout << f.name << ": " << (now ? "ON" : "OFF") << std::endl;
 			}
-			else
+			else // CodePatch
 			{
-				mem::PatchEx((BYTE*)(moduleBase + 0x63786), (BYTE*)"\x50\x8D\x4C\x24\x1C\x8B\xCE\xFF\xD2", 10, hProcess);
-			}
-		}
-		if (GetAsyncKeyState(VK_F6) & 1) // Added hotkey for Fast Fire
-		{
-			bFastFire = !bFastFire;
-			std::cout << "Fast Fire: " << (bFastFire ? "ON" : "OFF") << std::endl;
-		}
-		if (GetAsyncKeyState(VK_F7) & 1) // Added hotkey for Auto Shoot
-		{
-			bAutoShoot = !bAutoShoot;
-			std::cout << "Auto Shoot: " << (bAutoShoot ? "ON" : "OFF") << std::endl;
-		}
-		if (GetAsyncKeyState(VK_F8) & 1) // Added hotkey for FOV Change
-		{
-			bFovChange = !bFovChange;
-			std::cout << "FOV Change: " << (bFovChange ? "ON (110)" : "OFF (Default)") << std::endl;
-		}
-		if (GetAsyncKeyState(VK_F12) & 1)
-		{
-			return 0;
-		}
-
-		// continuous write or freeze
-		if (bHealth)
-		{
-			mem::PatchEx((BYTE*)healthAddr, (BYTE*)&freezeValue, sizeof(freezeValue), hProcess);
-		}
-		if (bArmor) // Added armor freeze logic
-		{
-			mem::PatchEx((BYTE*)armorAddr, (BYTE*)&freezeValue, sizeof(freezeValue), hProcess);
-		}
-
-		// Added ammo freeze logic
-		if (bAmmo)
-		{
-			mem::PatchEx((BYTE*)rifleAmmoAddr, (BYTE*)&ammoFreezeValue, sizeof(ammoFreezeValue), hProcess);
-			mem::PatchEx((BYTE*)smgAmmoAddr, (BYTE*)&ammoFreezeValue, sizeof(ammoFreezeValue), hProcess);
-			mem::PatchEx((BYTE*)sniperAmmoAddr, (BYTE*)&ammoFreezeValue, sizeof(ammoFreezeValue), hProcess);
-			mem::PatchEx((BYTE*)shotgunAmmoAddr, (BYTE*)&ammoFreezeValue, sizeof(ammoFreezeValue), hProcess);
-			mem::PatchEx((BYTE*)pistolAmmoAddr, (BYTE*)&ammoFreezeValue, sizeof(ammoFreezeValue), hProcess);
-			mem::PatchEx((BYTE*)grenadeAmmoAddr, (BYTE*)&ammoFreezeValue, sizeof(ammoFreezeValue), hProcess);
-		}
-
-		// Added fast fire logic
-		if (bFastFire)
-		{
-			mem::PatchEx((BYTE*)fastRifleAddr, (BYTE*)&fastFireValue, sizeof(fastFireValue), hProcess);
-			mem::PatchEx((BYTE*)fastSniperAddr, (BYTE*)&fastFireValue, sizeof(fastFireValue), hProcess);
-			mem::PatchEx((BYTE*)fastShotgunAddr, (BYTE*)&fastFireValue, sizeof(fastFireValue), hProcess);
-		}
-		// Note: To properly disable fast fire, we might need to write the default value back (e.g., 1)
-		// For simplicity, this version only enables it by writing 0.
-
-		// Added auto shoot logic
-		if (autoShootAddr) // Check if address is valid before writing
-		{
-			if (bAutoShoot)
-			{
-				mem::PatchEx((BYTE*)autoShootAddr, (BYTE*)&autoShootValueOn, sizeof(autoShootValueOn), hProcess);
-			}
-			else
-			{
-				// Write the OFF value when disabled to ensure it stops
-				mem::PatchEx((BYTE*)autoShootAddr, (BYTE*)&autoShootValueOff, sizeof(autoShootValueOff), hProcess);
+				const bool now = !f.enabled.load();
+				const BYTE* bytes = now ? f.patchedBytes : f.originalBytes;
+				mem::PatchEx((BYTE*)f.siteAddr, (BYTE*)bytes,
+				             (unsigned)f.patchLen, hProcess);
+				f.enabled.store(now, std::memory_order_release);
+				std::cout << f.name << ": " << (now ? "ON" : "OFF") << std::endl;
 			}
 		}
-
-		// Added FOV change logic
-		if (fovAddr) // Check if address is valid
-		{
-			if (bFovChange)
-			{
-				mem::PatchEx((BYTE*)fovAddr, (BYTE*)&newFovValue, sizeof(newFovValue), hProcess);
-			}
-			else
-			{
-				// Restore default FOV when disabled
-				mem::PatchEx((BYTE*)fovAddr, (BYTE*)&defaultFovValue, sizeof(defaultFovValue), hProcess);
-			}
-		}
-
 
 		Sleep(10);
 	}
 
-	std::cout << "Process not found, press enter to exit\n";
-	getchar();
+	// ----- Clean exit ---------------------------------------------------
+	g_running.store(false, std::memory_order_release);
+	if (freezeWorker.joinable()) freezeWorker.join();
+
+	// Restore any active code patches so the game stays sane.
+	for (int i = 0; i < F_COUNT; ++i)
+	{
+		Feature& f = features[i];
+		if (f.kind != FeatureKind::CodePatch) continue;
+		if (!f.enabled.load()) continue;
+		mem::PatchEx((BYTE*)f.siteAddr, (BYTE*)f.originalBytes,
+		             (unsigned)f.patchLen, hProcess);
+	}
+
+	CloseHandle(hProcess);
+	std::cout << "Trainer exited cleanly.\n";
 	return 0;
 }
 
 int main()
 {
-	// leet_ammo(); // Removed call to the old single-shot ammo function
-	recoil_delete();
+	leet_ammo();
+	RunTrainer();
+	return 0;
 }
-
